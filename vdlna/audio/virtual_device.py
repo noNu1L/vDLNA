@@ -15,18 +15,26 @@ VB_CABLE_URL = "https://vb-audio.com/Cable/index.htm"
 class VirtualAudioDevice:
     """Detect and query virtual audio devices."""
 
+    _KEYWORDS = (
+        "vb-audio virtual cable",
+        "vbaudio",
+        "vad",
+        "streaming add-on",
+    )
+
+    @staticmethod
+    def _is_virtual_input(dev: dict) -> bool:
+        if dev["max_input_channels"] <= 0:
+            return False
+        return any(kw in dev["name"].lower() for kw in VirtualAudioDevice._KEYWORDS)
+
     @staticmethod
     def find_device_index() -> int | None:
         """Return the sounddevice device index for a virtual audio input, or None."""
         devices = sd.query_devices()
         for idx, dev in enumerate(devices):
-            if dev["max_input_channels"] > 0:
-                name_lower = dev["name"].lower()
-                if any(kw in name_lower for kw in (
-                    "vb-audio", "cable", "vbaudio",
-                    "virtual", "vad", "streaming add-on",
-                )):
-                    return idx
+            if VirtualAudioDevice._is_virtual_input(dev):
+                return idx
         return None
 
     @staticmethod
@@ -54,7 +62,7 @@ class VirtualAudioDevice:
 
         seen: dict[str, dict] = {}  # normalised_name -> best entry
         for idx, dev in enumerate(sd.query_devices()):
-            if dev["max_input_channels"] <= 0:
+            if not VirtualAudioDevice._is_virtual_input(dev):
                 continue
 
             name: str = dev["name"].strip()
@@ -79,18 +87,6 @@ class VirtualAudioDevice:
             ),
             key=lambda d: d["name"].lower(),      # 按名称排序
         )
-        # result = []
-        # for entry in seen.values():
-        #     try:
-        #         sd.check_input_settings(
-        #             device=entry["index"],
-        #             channels=min(entry["channels"], 2),
-        #             samplerate=entry["sample_rate"],
-        #         )
-        #         result.append({k: v for k, v in entry.items() if k != "hostapi"})
-        #     except Exception:
-        #         pass  # 设备不可用，跳过
-        # return result
 
     @staticmethod
     def list_devices() -> list[dict]:

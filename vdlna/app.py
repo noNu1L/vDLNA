@@ -29,11 +29,54 @@ class App:
 
         self._renderer: DlnaRenderer | None = None
         self._shutdown_event = asyncio.Event()
+        self._stream_started = False
+
+    def configure_audio(self, device_index: int, sample_rate: int, channels: int) -> None:
+        channels = min(channels, 2)
+        self._capture._device_index = device_index
+        self._capture._sample_rate = sample_rate
+        self._capture._channels = channels
+        self._encoder._sample_rate = sample_rate
+        self._encoder._channels = channels
+
+    async def start_stream(self, loop: asyncio.AbstractEventLoop) -> None:
+        if self._stream_started:
+            return
+        self._encoder.set_event_loop(loop)
+        self._encoder.start()
+        self._capture.set_pcm_callback(self._encoder.feed_pcm)
+        await self._server.start()
+        self._capture.start()
+        self._stream_started = True
+
+    async def stop_stream(self) -> None:
+        if not self._stream_started:
+            return
+        self._capture.stop()
+        self._encoder.stop()
+        await self._server.stop()
+        self._stream_started = False
+
+    @property
+    def stream_url(self) -> str:
+        return self._server.url
+
+    @property
+    def latency(self) -> float:
+        return self._capture.latency
+
+    @property
+    def client_count(self) -> int:
+        return self._encoder.client_count
+
+    def feed_silence(self, frames: int = 1024) -> None:
+        import numpy as np
+        silence = np.zeros((frames, self._capture._channels), dtype=np.float32)
+        self._encoder.feed_pcm(silence)
 
     async def run(self, dlna_device: dict | None = None) -> None:
         """Start all subsystems and run until Ctrl+C."""
         loop = asyncio.get_running_loop()
-        self._encoder.set_event_loop(loop)
 
         # Find virtual audio device
         dev_idx = VirtualAudioDevice.find_device_index()
@@ -44,26 +87,15 @@ class App:
             print("[INFO] Install it with: python main.py device install")
             print("[INFO] Will attempt capture from default input device instead.")
         else:
-            self._capture._device_index = dev_idx
             for d in VirtualAudioDevice.list_devices():
                 if d["index"] == dev_idx:
-                    self._capture._sample_rate = d["sample_rate"]
-                    self._capture._channels = min(d["channels"], 2)
-                    self._encoder._sample_rate = d["sample_rate"]
-                    self._encoder._channels = min(d["channels"], 2)
+                    self.configure_audio(d["index"], d["sample_rate"], d["channels"])
                     break
             print(f"[INFO] Capturing from device [{dev_idx}]: virtual audio driver")
 
-        self._encoder.start()
-        self._capture.set_pcm_callback(self._encoder.feed_pcm)
-
-        # Start HTTP server
-        await self._server.start()
+        await self.start_stream(loop)
         print(f"[INFO] FLAC stream available at: {self._server.url}")
         print("[INFO] Press Ctrl+C to stop.")
-
-        # Start audio capture
-        self._capture.start()
 
         # DLNA auto-connect
         if dlna_device:
@@ -95,8 +127,6 @@ class App:
     async def shutdown(self) -> None:
         """Graceful shutdown."""
         print("\n[INFO] Shutting down...")
-        self._capture.stop()
-        self._encoder.stop()
 
         if self._renderer:
             try:
@@ -106,7 +136,7 @@ class App:
             finally:
                 await self._renderer.close()
 
-        await self._server.stop()
+        await self.stop_stream()
         print("[INFO] Stopped.")
 
 

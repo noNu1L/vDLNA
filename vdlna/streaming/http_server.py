@@ -7,6 +7,16 @@ from aiohttp import web
 
 from vdlna.audio.encoder import FlacBroadcastEncoder
 
+_STREAM_HEADERS = {
+    "Content-Type": "audio/flac",
+    "Cache-Control": "no-cache, no-store",
+    "transferMode.dlna.org": "Streaming",
+    "contentFeatures.dlna.org": (
+        "DLNA.ORG_PN=FLAC;DLNA.ORG_OP=00;DLNA.ORG_CI=0;"
+        "DLNA.ORG_FLAGS=01700000000000000000000000000000"
+    ),
+}
+
 
 class StreamServer:
     """HTTP server that exposes the FLAC broadcast stream.
@@ -57,15 +67,7 @@ class StreamServer:
 
     async def _handle_stream(self, request: web.Request) -> web.StreamResponse:
         q = self._encoder.add_client()
-        resp = web.StreamResponse(
-            status=200,
-            reason="OK",
-            headers={
-                "Content-Type": "audio/flac",
-                "Connection": "close",
-                "Cache-Control": "no-cache",
-            },
-        )
+        resp = web.StreamResponse(status=200, reason="OK", headers=_STREAM_HEADERS)
         await resp.prepare(request)
 
         try:

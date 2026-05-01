@@ -24,6 +24,14 @@ except Exception:
     _HAS_WINDOWS_UTILS = False
 
 
+DLNA_UDN_KEY = "dlna_udn"
+DLNA_LOCATION_KEY = "dlna_location"
+DLNA_NAME_KEY = "dlna_friendly_name"
+DLNA_HOST_KEY = "dlna_host"
+AUDIO_DEVICE_NAME_KEY = "audio_device_name"
+PORT_KEY = "port"
+
+
 def _find_available_port(start: int, max_tries: int = 20) -> int:
     """Return the first available TCP port starting from `start`."""
     for port in range(start, start + max_tries):
@@ -101,6 +109,19 @@ class AppGui:
 
         self._apply_saved_config()
         self._log("vDLNA 图形界面已启动。")
+
+    def _run_bg(self, task, on_ok=None, on_err=None) -> None:
+        """Run *task()* in a daemon thread; call on_ok() or on_err(err) on the main thread."""
+        def _worker():
+            try:
+                result = task()
+                if on_ok:
+                    self._root.after(0, lambda: on_ok(result))
+            except Exception as exc:
+                err = str(exc)
+                if on_err:
+                    self._root.after(0, lambda e=err: on_err(e))
+        threading.Thread(target=_worker, daemon=True).start()
 
     # ── UI ───────────────────────────────────────────────────
 
@@ -280,6 +301,57 @@ class AppGui:
         else:
             self._do_bind()
 
+    def _set_connecting_ui(self, text: str = "连接中...") -> None:
+        self._bind_btn.configure(state="disabled", text=text)
+        self._audio_combo.configure(state="disabled")
+        self._dlna_combo.configure(state="disabled")
+        self._scan_btn.configure(state="disabled")
+
+    def _set_unbound_ui(self) -> None:
+        self._bind_btn.configure(state="normal", text="建立连接")
+        self._audio_combo.configure(state="readonly")
+        self._dlna_combo.configure(state="readonly")
+        self._scan_btn.configure(state="normal")
+        self._vol_scale.configure(state="disabled")
+
+    def _set_bound_ui(self) -> None:
+        self._bind_btn.configure(state="normal", text="断开连接")
+        self._vol_scale.configure(state="normal")
+
+    def _start_bind(self, audio_dev: dict, target: dict, save_cfg: bool) -> None:
+        self._set_connecting_ui()
+
+        def _task():
+            if not self._streaming:
+                self._start_stream_sync(audio_dev)
+
+            if not self._app or not self._streaming:
+                raise RuntimeError("推流未运行")
+
+            stream_url = self._app.stream_url
+            renderer = DlnaRenderer(target["location"])
+            self._async.run_coro(renderer.connect(stream_url))
+            self._async.run_coro(renderer.play())
+            self._renderer = renderer
+            self._bound_udn = target["udn"]
+
+            if save_cfg:
+                save_config({
+                    PORT_KEY: int(self._port_var.get()),
+                    AUDIO_DEVICE_NAME_KEY: audio_dev["name"],
+                    DLNA_UDN_KEY: target["udn"],
+                    DLNA_LOCATION_KEY: target["location"],
+                    DLNA_NAME_KEY: target["friendly_name"],
+                    DLNA_HOST_KEY: target["host"],
+                })
+            return target["friendly_name"], stream_url
+
+        self._run_bg(
+            _task,
+            on_ok=lambda r: self._on_bind_success(*r),
+            on_err=self._on_bind_error,
+        )
+
     def _do_bind(self) -> None:
         audio_idx = self._audio_combo.current()
         if audio_idx < 0 or audio_idx >= len(self._audio_devices):
@@ -293,55 +365,15 @@ class AppGui:
 
         audio_dev = self._audio_devices[audio_idx]
         dlna_dev = self._dlna_devices[dlna_idx]
-
-        self._bind_btn.configure(state="disabled", text="连接中...")
-        self._audio_combo.configure(state="disabled")
-        self._dlna_combo.configure(state="disabled")
-        self._scan_btn.configure(state="disabled")
-
-        def _worker() -> None:
-            try:
-                if not self._streaming:
-                    self._start_stream_sync(audio_dev)
-
-                if not self._app or not self._streaming:
-                    raise RuntimeError("推流未运行")
-
-                stream_url = self._app._server.url
-                renderer = DlnaRenderer(dlna_dev["location"])
-                self._async.run_coro(renderer.connect(stream_url))
-                self._async.run_coro(renderer.play())
-                self._renderer = renderer
-                self._bound_udn = dlna_dev["udn"]
-
-                save_config({
-                    "port": int(self._port_var.get()),
-                    "audio_device_name": audio_dev["name"],
-                    "dlna_udn": dlna_dev["udn"],
-                    "dlna_location": dlna_dev["location"],
-                    "dlna_friendly_name": dlna_dev["friendly_name"],
-                    "dlna_host": dlna_dev["host"],
-                })
-
-                self._root.after(0, lambda: self._on_bind_success(
-                    dlna_dev["friendly_name"], stream_url))
-            except Exception as e:
-                err = str(e)
-                self._root.after(0, lambda er=err: self._on_bind_error(er))
-
-        threading.Thread(target=_worker, daemon=True).start()
+        self._start_bind(audio_dev, dlna_dev, save_cfg=True)
 
     def _on_bind_success(self, name: str, url: str) -> None:
-        self._bind_btn.configure(state="normal", text="断开连接")
-        self._vol_scale.configure(state="normal")
+        self._set_bound_ui()
         self._log(f"已连接: {name} → {url}")
         self._sync_volume_from_device()
 
     def _on_bind_error(self, err: str) -> None:
-        self._bind_btn.configure(state="normal", text="建立连接")
-        self._audio_combo.configure(state="readonly")
-        self._dlna_combo.configure(state="readonly")
-        self._scan_btn.configure(state="normal")
+        self._set_unbound_ui()
         self._log(f"连接失败: {err}")
 
     def _do_unbind(self) -> None:
@@ -350,35 +382,28 @@ class AppGui:
             self._reset_bind_state()
             return
 
-        self._bind_btn.configure(state="disabled", text="断开中...")
+        self._set_connecting_ui("断开中...")
 
-        def _worker() -> None:
+        def _task():
             try:
                 self._async.run_coro(renderer.stop())
                 self._async.run_coro(renderer.close())
             except Exception:
                 pass
-            finally:
-                self._renderer = None
-                self._bound_udn = None
-                self._streaming = False
-                # 清除连接配置，避免下次启动自动连接
-                cfg = load_config()
-                cfg.pop("dlna_udn", None)
-                cfg.pop("dlna_location", None)
-                cfg.pop("dlna_friendly_name", None)
-                cfg.pop("dlna_host", None)
-                save_config(cfg)
-                self._root.after(0, self._reset_bind_state)
+            self._renderer = None
+            self._bound_udn = None
+            self._streaming = False
+            cfg = load_config()
+            cfg.pop(DLNA_UDN_KEY, None)
+            cfg.pop(DLNA_LOCATION_KEY, None)
+            cfg.pop(DLNA_NAME_KEY, None)
+            cfg.pop(DLNA_HOST_KEY, None)
+            save_config(cfg)
 
-        threading.Thread(target=_worker, daemon=True).start()
+        self._run_bg(_task, on_ok=lambda _: self._reset_bind_state())
 
     def _reset_bind_state(self) -> None:
-        self._bind_btn.configure(state="normal", text="建立连接")
-        self._audio_combo.configure(state="readonly")
-        self._dlna_combo.configure(state="readonly")
-        self._scan_btn.configure(state="normal")
-        self._vol_scale.configure(state="disabled")
+        self._set_unbound_ui()
         self._log("已断开连接。")
 
     # ── 音量 ─────────────────────────────────────────────────
@@ -392,28 +417,21 @@ class AppGui:
         self._vol_label.configure(text=f"{val}%")
         if not self._renderer:
             return
-
-        def _send() -> None:
-            try:
-                self._async.run_coro(self._renderer.set_volume(val))
-            except Exception:
-                pass
-
-        threading.Thread(target=_send, daemon=True).start()
+        renderer = self._renderer
+        self._run_bg(lambda: self._async.run_coro(renderer.set_volume(val)))
 
     def _sync_volume_from_device(self) -> None:
-        def _fetch() -> None:
+        def _fetch():
             if not self._renderer:
-                return
-            try:
-                vol = self._async.run_coro(self._renderer.get_volume())
-                if vol is not None:
-                    self._root.after(0, lambda: self._vol_var.set(vol))
-                    self._root.after(0, lambda: self._vol_label.configure(text=f"{vol}%"))
-            except Exception:
-                pass
+                return None
+            return self._async.run_coro(self._renderer.get_volume())
 
-        threading.Thread(target=_fetch, daemon=True).start()
+        def _apply(vol):
+            if vol is not None:
+                self._vol_var.set(vol)
+                self._vol_label.configure(text=f"{vol}%")
+
+        self._run_bg(_fetch, on_ok=_apply)
 
     # ── 配置 ─────────────────────────────────────────────────
 
@@ -421,11 +439,11 @@ class AppGui:
         cfg = load_config()
         if not cfg:
             return
-        if "port" in cfg:
-            self._port_var.set(str(cfg["port"]))
+        if PORT_KEY in cfg:
+            self._port_var.set(str(cfg[PORT_KEY]))
 
         # 恢复监听设备选择
-        audio_name = cfg.get("audio_device_name", "")
+        audio_name = cfg.get(AUDIO_DEVICE_NAME_KEY, "")
         if audio_name:
             for i, d in enumerate(self._audio_devices):
                 if d["name"] == audio_name:
@@ -433,10 +451,10 @@ class AppGui:
                     break
 
         # 从配置恢复 DLNA 设备到下拉框（无需扫描）
-        friendly = cfg.get("dlna_friendly_name", "")
-        host = cfg.get("dlna_host", "")
-        udn = cfg.get("dlna_udn", "")
-        location = cfg.get("dlna_location", "")
+        friendly = cfg.get(DLNA_NAME_KEY, "")
+        host = cfg.get(DLNA_HOST_KEY, "")
+        udn = cfg.get(DLNA_UDN_KEY, "")
+        location = cfg.get(DLNA_LOCATION_KEY, "")
         if friendly and udn and location:
             saved_device = {
                 "udn": udn,
@@ -464,37 +482,14 @@ class AppGui:
             return
 
         audio_dev = self._audio_devices[audio_idx]
-        dlna_name = cfg.get("dlna_friendly_name", cfg["dlna_udn"])
-        dlna_host = cfg.get("dlna_host", "")
-        location = cfg["dlna_location"]
-        udn = cfg["dlna_udn"]
-
-        self._bind_btn.configure(state="disabled", text="连接中...")
-        self._audio_combo.configure(state="disabled")
-        self._dlna_combo.configure(state="disabled")
-        self._scan_btn.configure(state="disabled")
-        self._log(f"直接连接: {dlna_name}  ({dlna_host})")
-
-        def _worker() -> None:
-            try:
-                if not self._streaming:
-                    self._start_stream_sync(audio_dev)
-                if not self._app or not self._streaming:
-                    raise RuntimeError("推流未运行")
-
-                stream_url = self._app._server.url
-                renderer = DlnaRenderer(location)
-                self._async.run_coro(renderer.connect(stream_url))
-                self._async.run_coro(renderer.play())
-                self._renderer = renderer
-                self._bound_udn = udn
-
-                self._root.after(0, lambda: self._on_bind_success(dlna_name, stream_url))
-            except Exception as e:
-                err = str(e)
-                self._root.after(0, lambda er=err: self._on_bind_error(er))
-
-        threading.Thread(target=_worker, daemon=True).start()
+        target = {
+            "udn": cfg[DLNA_UDN_KEY],
+            "friendly_name": cfg.get(DLNA_NAME_KEY, cfg[DLNA_UDN_KEY]),
+            "host": cfg.get(DLNA_HOST_KEY, ""),
+            "location": cfg[DLNA_LOCATION_KEY],
+        }
+        self._log(f"直接连接: {target['friendly_name']}  ({target['host']})")
+        self._start_bind(audio_dev, target, save_cfg=False)
 
     # ── 开机启动 ─────────────────────────────────────────────
 
@@ -538,38 +533,24 @@ class AppGui:
                 dev_idx = audio_dev["index"]
                 actual_rate = audio_dev["sample_rate"]
                 actual_ch = min(audio_dev["channels"], 2)
-                self._app._capture._device_index = dev_idx
-                self._app._capture._sample_rate = actual_rate
-                self._app._capture._channels = actual_ch
-                self._app._encoder._sample_rate = actual_rate
-                self._app._encoder._channels = actual_ch
-
-                self._app._encoder.set_event_loop(self._async._loop)
-                self._app._encoder.start()
-                self._app._capture.set_pcm_callback(self._app._encoder.feed_pcm)
+                self._app.configure_audio(dev_idx, actual_rate, actual_ch)
                 self._log(f"采集: {audio_dev['name']} {actual_rate}Hz {actual_ch}ch")
 
-                await self._app._server.start()
-                url = self._app._server.url
-                self._app._capture.start()
-
-                import numpy as np
-                silence = np.zeros((1024, actual_ch), dtype=np.float32)
-                self._app._encoder.feed_pcm(silence)
+                await self._app.start_stream(self._async._loop)
+                url = self._app.stream_url
+                self._app.feed_silence()
 
                 self._streaming = True
                 self._stream_ready_event.set()
                 self._root.after(0, lambda: self._on_stream_started(url))
 
                 while self._streaming:
-                    latency = self._app._capture.latency
+                    latency = self._app.latency
                     self._root.after(0, lambda l=latency:
                         self._stream_status_var.set(f"运行中 | 延迟: {l*1000:.1f}ms"))
                     await asyncio.sleep(1)
 
-                self._app._capture.stop()
-                self._app._encoder.stop()
-                await self._app._server.stop()
+                await self._app.stop_stream()
                 self._root.after(0, self._on_stream_stopped)
             except Exception as e:
                 err = str(e)
