@@ -35,9 +35,6 @@ class App:
         loop = asyncio.get_running_loop()
         self._encoder.set_event_loop(loop)
 
-        self._encoder.start()
-        self._capture.set_pcm_callback(self._encoder.feed_pcm)
-
         # Find virtual audio device
         dev_idx = VirtualAudioDevice.find_device_index()
         if dev_idx is None:
@@ -48,7 +45,17 @@ class App:
             print("[INFO] Will attempt capture from default input device instead.")
         else:
             self._capture._device_index = dev_idx
+            for d in VirtualAudioDevice.list_devices():
+                if d["index"] == dev_idx:
+                    self._capture._sample_rate = d["sample_rate"]
+                    self._capture._channels = min(d["channels"], 2)
+                    self._encoder._sample_rate = d["sample_rate"]
+                    self._encoder._channels = min(d["channels"], 2)
+                    break
             print(f"[INFO] Capturing from device [{dev_idx}]: virtual audio driver")
+
+        self._encoder.start()
+        self._capture.set_pcm_callback(self._encoder.feed_pcm)
 
         # Start HTTP server
         await self._server.start()

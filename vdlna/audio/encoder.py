@@ -14,7 +14,7 @@ class FlacBroadcastEncoder:
     One encoder, N queues — each client receives the same FLAC frames.
     """
 
-    def __init__(self, sample_rate: int = 44100, channels: int = 2,
+    def __init__(self, sample_rate: int = 48000, channels: int = 2,
                  bits_per_sample: int = 16, compression_level: int = 5):
         self._sample_rate = sample_rate
         self._channels = channels
@@ -28,13 +28,13 @@ class FlacBroadcastEncoder:
 
         self._header_blocks: list[bytes] = []
         self._header_complete = False
-        self._audio_ring: deque[bytes] = deque(maxlen=64)
+        self._audio_ring: deque[bytes] = deque(maxlen=128)
 
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
 
     def add_client(self) -> asyncio.Queue[bytes]:
-        q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=64)
+        q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=256)
         with self._lock:
             # Pre-fill with cached FLAC header so every client gets a valid stream
             for block in self._header_blocks:
@@ -124,11 +124,8 @@ class FlacBroadcastEncoder:
         try:
             q.put_nowait(data)
         except asyncio.QueueFull:
-            try:
-                q.get_nowait()
-                q.put_nowait(data)
-            except asyncio.QueueEmpty:
-                pass
+            # 丢弃当前帧保留已有流，避免 FLAC 断层
+            pass
 
     def stop(self) -> None:
         if self._encoder is None:

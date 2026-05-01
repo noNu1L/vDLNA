@@ -12,6 +12,22 @@ import cmd
 import shlex
 import sys
 
+
+def _ensure_single_instance() -> None:
+    """Windows 命名互斥体，防止程序重复启动。"""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "Global\\vDLNA_SingleInstance")
+    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        import tkinter as tk
+        from tkinter import messagebox
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showwarning("vDLNA", "程序已在运行中。")
+        root.destroy()
+        sys.exit(0)
+
 from vdlna.app import App, setup_signal_handlers
 from vdlna.audio.virtual_device import VirtualAudioDevice
 from vdlna.dlna.diagnostics import run_diagnostics, run_raw_msearch
@@ -347,4 +363,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    _ensure_single_instance()
     main()

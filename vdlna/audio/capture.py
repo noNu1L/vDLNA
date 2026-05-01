@@ -13,7 +13,7 @@ class AudioCapture:
     Runs a sounddevice InputStream in a dedicated callback thread.
     """
 
-    def __init__(self, sample_rate: int = 44100, channels: int = 2,
+    def __init__(self, sample_rate: int = 48000, channels: int = 2,
                  device_index: int | None = None):
         self._sample_rate = sample_rate
         self._channels = channels

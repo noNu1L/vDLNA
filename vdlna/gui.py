@@ -297,6 +297,7 @@ class AppGui:
         self._bind_btn.configure(state="disabled", text="连接中...")
         self._audio_combo.configure(state="disabled")
         self._dlna_combo.configure(state="disabled")
+        self._scan_btn.configure(state="disabled")
 
         def _worker() -> None:
             try:
@@ -340,6 +341,7 @@ class AppGui:
         self._bind_btn.configure(state="normal", text="建立连接")
         self._audio_combo.configure(state="readonly")
         self._dlna_combo.configure(state="readonly")
+        self._scan_btn.configure(state="normal")
         self._log(f"连接失败: {err}")
 
     def _do_unbind(self) -> None:
@@ -375,6 +377,7 @@ class AppGui:
         self._bind_btn.configure(state="normal", text="建立连接")
         self._audio_combo.configure(state="readonly")
         self._dlna_combo.configure(state="readonly")
+        self._scan_btn.configure(state="normal")
         self._vol_scale.configure(state="disabled")
         self._log("已断开连接。")
 
@@ -469,6 +472,7 @@ class AppGui:
         self._bind_btn.configure(state="disabled", text="连接中...")
         self._audio_combo.configure(state="disabled")
         self._dlna_combo.configure(state="disabled")
+        self._scan_btn.configure(state="disabled")
         self._log(f"直接连接: {dlna_name}  ({dlna_host})")
 
         def _worker() -> None:
@@ -531,10 +535,6 @@ class AppGui:
 
         async def _run():
             try:
-                self._app._encoder.set_event_loop(self._async._loop)
-                self._app._encoder.start()
-                self._app._capture.set_pcm_callback(self._app._encoder.feed_pcm)
-
                 dev_idx = audio_dev["index"]
                 actual_rate = audio_dev["sample_rate"]
                 actual_ch = min(audio_dev["channels"], 2)
@@ -543,6 +543,10 @@ class AppGui:
                 self._app._capture._channels = actual_ch
                 self._app._encoder._sample_rate = actual_rate
                 self._app._encoder._channels = actual_ch
+
+                self._app._encoder.set_event_loop(self._async._loop)
+                self._app._encoder.start()
+                self._app._capture.set_pcm_callback(self._app._encoder.feed_pcm)
                 self._log(f"采集: {audio_dev['name']} {actual_rate}Hz {actual_ch}ch")
 
                 await self._app._server.start()
