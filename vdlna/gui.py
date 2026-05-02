@@ -14,6 +14,7 @@ from vdlna.dlna.control import DlnaRenderer
 from vdlna.dlna.discovery import scan_dlna_renderers
 from vdlna.util.config import load_config, save_config
 from vdlna.util.latency_meter import LatencyMeter
+from vdlna.util.dsp_webview import open_dsp
 
 try:
     from vdlna.util.windows import (
@@ -92,6 +93,7 @@ class AppGui:
         self._stream_done_event.set()
         self._stream_error: str | None = None
         self._log_queue = queue.Queue()
+        self._dsp_device: dict | None = None
         self._tray_icon = None
         self._pending_auto_bind_udn: str | None = None
         self._async = AsyncLoop()
@@ -184,7 +186,7 @@ class AppGui:
         ttk.Label(f, text="音量:").grid(row=0, column=1, padx=(0, 2))
         self._vol_var = tk.IntVar(value=100)
         self._vol_scale = ttk.Scale(f, from_=0, to=100, variable=self._vol_var,
-                                     orient="horizontal", length=100,
+                                     orient="horizontal", length=150,
                                      command=self._on_volume, state="disabled")
         self._vol_scale.grid(row=0, column=2, padx=2)
         self._vol_scale.bind("<MouseWheel>", self._on_vol_wheel)
@@ -197,6 +199,11 @@ class AppGui:
 
         self._latency_btn = ttk.Button(f, text="实时延迟", command=self._open_latency_window)
         self._latency_btn.grid(row=0, column=5, padx=(8, 0))
+
+        self._dsp_btn = ttk.Button(f, text="DSP - unAirplay", width=16,
+                                   command=self._open_dsp_window)
+        self._dsp_btn.grid(row=0, column=6, padx=(8, 0))
+        self._dsp_btn.grid_remove()
 
     def _build_log_section(self, row: int) -> None:
         f = ttk.LabelFrame(self._root, text="日志", padding=(8, 4))
@@ -353,6 +360,8 @@ class AppGui:
                     DLNA_LOCATION_KEY: target["location"],
                     DLNA_NAME_KEY: target["friendly_name"],
                     DLNA_HOST_KEY: target["host"],
+                    "server": target.get("server", ""),
+                    "device_id": target.get("device_id", ""),
                 })
             return target["friendly_name"], stream_url
 
@@ -381,6 +390,16 @@ class AppGui:
         self._set_bound_ui()
         self._log(f"已连接: {name} → {url}")
         self._sync_volume_from_device()
+
+        # Show DSP button if connected to unAirplay
+        for d in self._dlna_devices:
+            if d.get("udn") == self._bound_udn:
+                server = d.get("server", "")
+                if "unairplay" in server.lower():
+                    self._dsp_device = d
+                    self._dsp_btn.grid()
+                    self._log("检测到 unAirplay 设备，DSP 控制可用。")
+                    break
 
     def _on_bind_error(self, err: str) -> None:
         self._set_unbound_ui()
@@ -414,12 +433,14 @@ class AppGui:
 
     def _reset_bind_state(self) -> None:
         self._set_unbound_ui()
+        self._dsp_btn.grid_remove()
+        self._dsp_device = None
         self._log("已断开连接。")
 
     # ── 音量 ─────────────────────────────────────────────────
 
     def _on_vol_wheel(self, event) -> None:
-        self._vol_var.set(max(0, min(100, self._vol_var.get() + (5 if event.delta > 0 else -5))))
+        self._vol_var.set(max(0, min(100, self._vol_var.get() + (3 if event.delta > 0 else -3))))
         self._on_volume()
 
     def _on_volume(self, *_args) -> None:
@@ -472,6 +493,8 @@ class AppGui:
                 "host": host,
                 "location": location,
                 "manufacturer": "",
+                "server": cfg.get("server", ""),
+                "device_id": cfg.get("device_id", ""),
             }
             self._dlna_devices = [saved_device]
             label = f"{friendly}  ({host})"
@@ -534,8 +557,6 @@ class AppGui:
         self._stream_ready_event.clear()
         self._stream_done_event.clear()
         self._stream_error = None
-        self._root.after(0, lambda: self._stream_status_var.set("启动中..."))
-
         self._app = App(port=port)
 
         async def _run():
@@ -555,9 +576,6 @@ class AppGui:
                 self._root.after(0, lambda: self._on_stream_started(url))
 
                 while self._streaming:
-                    latency = self._app.latency
-                    self._root.after(0, lambda l=latency:
-                        self._stream_status_var.set(f"运行中 | 延迟: {l*1000:.1f}ms"))
                     await asyncio.sleep(1)
 
                 await self._app.stop_stream()
@@ -577,7 +595,7 @@ class AppGui:
             raise RuntimeError(self._stream_error)
 
     def _on_stream_started(self, url: str) -> None:
-        self._stream_status_var.set("运行中 | 延迟: --")
+        self._stream_status_var.set("运行中")
         self._log(f"推流地址: {url}")
 
     def _on_stream_stopped(self) -> None:
@@ -692,6 +710,21 @@ class AppGui:
         ttk.Label(ctrl, text="延迟:", font=("", 10, "bold")).pack(side="left")
         ttk.Label(ctrl, textvariable=latency_var, font=("Consolas", 12),
                   foreground="blue", width=12).pack(side="left", padx=(4, 0))
+
+    def _open_dsp_window(self) -> None:
+        """Open unAirplay DSP control panel via pywebview."""
+        if self._dsp_device is None:
+            return
+        host = self._dsp_device.get("host", "")
+        if not host:
+            return
+
+        # host may contain port (e.g. "192.168.67.208:6088"),
+        # DSP web runs on a different port, strip the port first
+        host_ip = host.split(":")[0]
+        device_id = self._dsp_device.get("device_id", "")
+        self._log(f"打开 DSP 控制: {host_ip}, device={device_id}")
+        open_dsp(host_ip, device_id)
 
     # ── 日志 ─────────────────────────────────────────────────
 

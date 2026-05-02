@@ -142,8 +142,13 @@ async def scan_dlna_renderers(
         seen_udns.add(udn)
 
         host = ""
+        device_id = ""
         if location and "://" in location:
-            host = location.split("/")[2]
+            parts = location.split("/")
+            host = parts[2]
+            # /device/{device_id}/device.xml → extract device_id
+            if len(parts) >= 5 and parts[3] == "device":
+                device_id = parts[4]
 
         friendly_name, manufacturer = await _fetch_device_identity(location, _log)
         display_name = friendly_name or server or usn
@@ -156,6 +161,8 @@ async def scan_dlna_renderers(
             "manufacturer": manufacturer or "",
             "location": location,
             "host": host,
+            "server": server,
+            "device_id": device_id,
         }
         renderers.append(device)
 
