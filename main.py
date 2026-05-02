@@ -13,6 +13,26 @@ import shlex
 import sys
 
 
+def _set_dpi_awareness() -> None:
+    """Enable Windows DPI awareness so the GUI renders crisp at >100% scaling."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    # Try PerMonitorV2 (Win 10 1703+) → PerMonitor (Win 8.1+) → System (Vista+)
+    for awareness, name in ((2, "PerMonitorV2"), (1, "PerMonitor"), (0, "System")):
+        try:
+            result = ctypes.windll.shcore.SetProcessDpiAwareness(awareness)
+            if result == 0:  # S_OK
+                return
+        except Exception:
+            continue
+    # Fallback for Vista/7 without shcore
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
 def _ensure_single_instance() -> None:
     """Windows 命名互斥体，防止程序重复启动。"""
     if sys.platform != "win32":
@@ -363,5 +383,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    _set_dpi_awareness()
     _ensure_single_instance()
     main()

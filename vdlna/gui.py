@@ -13,6 +13,7 @@ from vdlna.audio.virtual_device import VirtualAudioDevice
 from vdlna.dlna.control import DlnaRenderer
 from vdlna.dlna.discovery import scan_dlna_renderers
 from vdlna.util.config import load_config, save_config
+from vdlna.util.latency_meter import LatencyMeter
 
 try:
     from vdlna.util.windows import (
@@ -98,8 +99,14 @@ class AppGui:
 
         self._root = tk.Tk()
         self._root.title("vDLNA")
-        self._root.geometry("580x400")
         self._root.resizable(False, False)
+
+        ww, wh = 950, 650
+        sw = self._root.winfo_screenwidth()
+        sh = self._root.winfo_screenheight()
+        x = (sw - ww) // 2
+        y = (sh - wh) // 2
+        self._root.geometry(f"{ww}x{wh}+{x}+{y}")
 
         self._port_var = tk.StringVar(value="9876")  # 内部使用，不显示
 
@@ -188,6 +195,9 @@ class AppGui:
         ttk.Label(f, textvariable=self._stream_status_var, foreground="gray").grid(
             row=0, column=4, padx=(8, 0), sticky="e")
 
+        self._latency_btn = ttk.Button(f, text="实时延迟", command=self._open_latency_window)
+        self._latency_btn.grid(row=0, column=5, padx=(8, 0))
+
     def _build_log_section(self, row: int) -> None:
         f = ttk.LabelFrame(self._root, text="日志", padding=(8, 4))
         f.grid(row=row, column=0, sticky="nsew", padx=8, pady=(4, 6))
@@ -238,7 +248,7 @@ class AppGui:
 
         def _worker() -> None:
             try:
-                devices = self._async.run_coro(scan_dlna_renderers(timeout=5.0))
+                devices = self._async.run_coro(scan_dlna_renderers(timeout=2.0))
                 self._root.after(0, lambda: self._on_scan_complete(devices))
             except Exception:
                 self._root.after(0, lambda: self._on_scan_complete([]))
@@ -575,6 +585,113 @@ class AppGui:
         self._app = None
         self._log("推流已停止。")
         self._stream_done_event.set()
+
+    # ── 延迟测量 ─────────────────────────────────────────────
+
+    def _open_latency_window(self) -> None:
+        win = tk.Toplevel(self._root)
+        win.title("实时延迟测量")
+        win.resizable(False, False)
+        win.transient(self._root)
+
+        ww, wh = 460, 200
+        x = self._root.winfo_x() + (self._root.winfo_width() - ww) // 2
+        y = self._root.winfo_y() + (self._root.winfo_height() - wh) // 2
+        win.geometry(f"{ww}x{wh}+{x}+{y}")
+
+        ttk.Label(win, text="此功能通过对比虚拟声卡输出与麦克风输入的音频信号来估算端到端延迟。",
+                  wraplength=440).pack(pady=(12, 4), padx=10, anchor="w")
+        ttk.Label(win, text="请确保麦克风能拾取到音箱发出的声音。",
+                  wraplength=440).pack(pady=(0, 8), padx=10, anchor="w")
+        ctrl = ttk.Frame(win)
+        ctrl.pack(pady=(10, 10), padx=10, fill="x")
+
+        meter: LatencyMeter | None = None
+        running = False
+        after_id: str | None = None
+        latency_var = tk.StringVar(value="-- ms")
+
+        def _do_start():
+            nonlocal meter, running, after_id
+
+            audio_idx = self._audio_combo.current()
+            if audio_idx < 0 or audio_idx >= len(self._audio_devices):
+                self._log("延迟测量: 未选择虚拟声卡设备")
+                return
+
+            dev = self._audio_devices[audio_idx]
+            try:
+                meter = LatencyMeter(
+                    virtual_device_index=dev["index"],
+                    sample_rate=dev["sample_rate"],
+                    channels=min(dev["channels"], 2),
+                )
+                meter.start()
+            except Exception as e:
+                self._log(f"延迟测量启动失败: {e}")
+                return
+
+            running = True
+            start_btn.configure(text="停止测量")
+            latency_var.set("采集中...")
+
+            def _schedule():
+                if not running:
+                    return
+                self._run_bg(meter.compute_latency_ms,
+                             on_ok=_on_result, on_err=_on_err)
+
+            def _on_result(ms):
+                nonlocal after_id
+                if not running:
+                    return
+                if ms is not None:
+                    latency_var.set(f"{ms:.1f} ms")
+                else:
+                    latency_var.set("采集中...")
+                after_id = self._root.after(2000, _schedule)
+
+            def _on_err(err):
+                nonlocal after_id
+                if not running:
+                    return
+                latency_var.set(f"错误")
+                after_id = self._root.after(3000, _schedule)
+
+            _schedule()
+
+        def _do_stop():
+            nonlocal meter, running, after_id
+            running = False
+            if after_id is not None:
+                self._root.after_cancel(after_id)
+                after_id = None
+            if meter is not None:
+                try:
+                    meter.stop()
+                except Exception:
+                    pass
+                meter = None
+            start_btn.configure(text="开始延迟计算")
+            latency_var.set("-- ms")
+
+        def _toggle():
+            if running:
+                _do_stop()
+            else:
+                _do_start()
+
+        def _on_win_close():
+            _do_stop()
+            win.destroy()
+        win.protocol("WM_DELETE_WINDOW", _on_win_close)
+
+        start_btn = ttk.Button(ctrl, text="开始延迟计算", command=_toggle)
+        start_btn.pack(side="left", padx=(0, 12))
+
+        ttk.Label(ctrl, text="延迟:", font=("", 10, "bold")).pack(side="left")
+        ttk.Label(ctrl, textvariable=latency_var, font=("Consolas", 12),
+                  foreground="blue", width=12).pack(side="left", padx=(4, 0))
 
     # ── 日志 ─────────────────────────────────────────────────
 
