@@ -117,6 +117,7 @@ async def scan_dlna_renderers(
         usn = headers.get("USN", headers.get("usn", ""))
         location = headers.get("LOCATION", headers.get("location", ""))
         server = headers.get("SERVER", headers.get("server", ""))
+        dsp_url = headers.get("X-DSP-URL", headers.get("x-dsp-url", ""))
         st = headers.get("ST", headers.get("st", ""))
         nt = headers.get("NT", headers.get("nt", ""))
         remote = headers.get("_remote_addr", headers.get("_REMOTE_ADDR", ""))
@@ -163,6 +164,7 @@ async def scan_dlna_renderers(
             "host": host,
             "server": server,
             "device_id": device_id,
+            "dsp_url": dsp_url,
         }
         renderers.append(device)
 

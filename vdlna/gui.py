@@ -362,6 +362,7 @@ class AppGui:
                     DLNA_HOST_KEY: target["host"],
                     "server": target.get("server", ""),
                     "device_id": target.get("device_id", ""),
+                    "dsp_url": target.get("dsp_url", ""),
                 })
             return target["friendly_name"], stream_url
 
@@ -495,6 +496,7 @@ class AppGui:
                 "manufacturer": "",
                 "server": cfg.get("server", ""),
                 "device_id": cfg.get("device_id", ""),
+                "dsp_url": cfg.get("dsp_url", ""),
             }
             self._dlna_devices = [saved_device]
             label = f"{friendly}  ({host})"
@@ -715,16 +717,13 @@ class AppGui:
         """Open unAirplay DSP control panel via pywebview."""
         if self._dsp_device is None:
             return
-        host = self._dsp_device.get("host", "")
-        if not host:
+        dsp_url = self._dsp_device.get("dsp_url", "")
+        if not dsp_url:
             return
 
-        # host may contain port (e.g. "192.168.67.208:6088"),
-        # DSP web runs on a different port, strip the port first
-        host_ip = host.split(":")[0]
         device_id = self._dsp_device.get("device_id", "")
-        self._log(f"打开 DSP 控制: {host_ip}, device={device_id}")
-        open_dsp(host_ip, device_id)
+        self._log(f"打开 DSP 控制: {dsp_url}, device={device_id}")
+        open_dsp(dsp_url, device_id)
 
     # ── 日志 ─────────────────────────────────────────────────
 

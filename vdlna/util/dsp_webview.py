@@ -6,9 +6,6 @@ pywebview requires the main thread; a subprocess provides its own.
 import subprocess
 import sys
 
-WEB_PORT = 6089  # unAirplay default web control panel port
-
-
 def _build_dsp_js(device_id: str | None) -> str:
     """Return JS that opens the DSP modal and hides everything else."""
     return f"""
@@ -74,12 +71,12 @@ def _build_dsp_js(device_id: str | None) -> str:
 """
 
 
-def _run_webview(host: str, device_id: str | None) -> None:
+def _run_webview(dsp_url: str, device_id: str | None) -> None:
     """Entry point for the subprocess — runs webview on its main thread."""
     import webview
 
-    url = f"http://{host}:{WEB_PORT}/"
-    win = webview.create_window("DSP 控制 / unAirplay", url, width=600, height=820, resizable=False)
+    win = webview.create_window("DSP 控制 / unAirplay", dsp_url, width=600,
+                                height=820, resizable=False)
 
     def _on_loaded() -> None:
         win.evaluate_js(_build_dsp_js(device_id))
@@ -91,16 +88,15 @@ def _run_webview(host: str, device_id: str | None) -> None:
 _dsp_process: subprocess.Popen | None = None
 
 
-def open_dsp(host: str, device_id: str | None = None) -> None:
+def open_dsp(dsp_url: str, device_id: str | None = None) -> None:
     """Launch pywebview DSP window in a subprocess (singleton)."""
     global _dsp_process
     if _dsp_process is not None and _dsp_process.poll() is None:
         return  # already open
-    host_ip = host.split(":")[0]
     code = (
         f"import sys; sys.path.insert(0, {sys.path[0]!r});"
         f"from vdlna.util.dsp_webview import _run_webview;"
-        f"_run_webview({host_ip!r}, {device_id!r})"
+        f"_run_webview({dsp_url!r}, {device_id!r})"
     )
     _dsp_process = subprocess.Popen(
         [sys.executable, "-c", code],
