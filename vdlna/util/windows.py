@@ -65,7 +65,7 @@ def apply_window_icon(root) -> None:
 def start_tray_icon(show_cb, exit_cb):
     import pystray
     menu = pystray.Menu(
-        pystray.MenuItem("打开主界面", show_cb, default=True),
+        pystray.MenuItem("打开主界面", show_cb),
         pystray.MenuItem("退出", exit_cb),
     )
     icon = pystray.Icon("vDLNA", tray_icon_image(), "vDLNA", menu)

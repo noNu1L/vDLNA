@@ -15,7 +15,6 @@ from vdlna.dlna.discovery import scan_dlna_renderers
 from vdlna.util.config import load_config, save_config
 from vdlna.util.latency_meter import LatencyMeter
 from vdlna.util.dsp_webview import open_dsp
-from vdlna.util.media_info import get_media_info_sync
 
 try:
     from vdlna.util.windows import (
@@ -205,10 +204,6 @@ class AppGui:
                                    command=self._open_dsp_window)
         self._dsp_btn.grid(row=0, column=6, padx=(8, 0))
         self._dsp_btn.grid_remove()
-
-        self._media_info_var = tk.StringVar(value="")
-        ttk.Label(f, textvariable=self._media_info_var, foreground="#409eff").grid(
-            row=1, column=0, columnspan=7, sticky="w", pady=(4, 0))
 
     def _build_log_section(self, row: int) -> None:
         f = ttk.LabelFrame(self._root, text="日志", padding=(8, 4))
@@ -582,15 +577,8 @@ class AppGui:
                 self._stream_ready_event.set()
                 self._root.after(0, lambda: self._on_stream_started(url))
 
-                tick = 0
                 while self._streaming:
                     await asyncio.sleep(1)
-                    tick += 1
-                    if tick % 3 == 0:
-                        info = get_media_info_sync()
-                        if info:
-                            text = f"{info['artist']} - {info['title']}" if info["artist"] else info["title"]
-                            self._root.after(0, lambda t=text: self._media_info_var.set(t))
 
                 await self._app.stop_stream()
                 self._root.after(0, self._on_stream_stopped)
@@ -614,7 +602,6 @@ class AppGui:
 
     def _on_stream_stopped(self) -> None:
         self._stream_status_var.set("已停止")
-        self._media_info_var.set("")
         self._app = None
         self._log("推流已停止。")
         self._stream_done_event.set()
@@ -627,7 +614,7 @@ class AppGui:
         win.resizable(False, False)
         win.transient(self._root)
 
-        ww, wh = 460, 200
+        ww, wh = 460, 180
         x = self._root.winfo_x() + (self._root.winfo_width() - ww) // 2
         y = self._root.winfo_y() + (self._root.winfo_height() - wh) // 2
         win.geometry(f"{ww}x{wh}+{x}+{y}")
@@ -640,18 +627,11 @@ class AppGui:
         ctrl.pack(pady=(10, 10), padx=10, fill="x")
 
         meter: LatencyMeter | None = None
-        running = False
         after_id: str | None = None
-        latency_var = tk.StringVar(value="-- ms")
+        latency_var = tk.StringVar(value="采集中...")
 
-        def _do_start():
-            nonlocal meter, running, after_id
-
-            audio_idx = self._audio_combo.current()
-            if audio_idx < 0 or audio_idx >= len(self._audio_devices):
-                self._log("延迟测量: 未选择虚拟声卡设备")
-                return
-
+        audio_idx = self._audio_combo.current()
+        if audio_idx >= 0 and audio_idx < len(self._audio_devices):
             dev = self._audio_devices[audio_idx]
             try:
                 meter = LatencyMeter(
@@ -662,65 +642,44 @@ class AppGui:
                 meter.start()
             except Exception as e:
                 self._log(f"延迟测量启动失败: {e}")
+
+        def _schedule():
+            nonlocal after_id
+            if meter is None:
                 return
+            self._run_bg(meter.compute_latency_ms,
+                         on_ok=_on_result, on_err=_on_err)
 
-            running = True
-            start_btn.configure(text="停止测量")
-            latency_var.set("采集中...")
+        def _on_result(ms):
+            nonlocal after_id
+            if meter is None:
+                return
+            if ms is not None:
+                latency_var.set(f"{ms:.1f} ms")
+            else:
+                latency_var.set("采集中...")
+            after_id = self._root.after(2000, _schedule)
 
-            def _schedule():
-                if not running:
-                    return
-                self._run_bg(meter.compute_latency_ms,
-                             on_ok=_on_result, on_err=_on_err)
+        def _on_err(_err):
+            nonlocal after_id
+            if meter is None:
+                return
+            after_id = self._root.after(3000, _schedule)
 
-            def _on_result(ms):
-                nonlocal after_id
-                if not running:
-                    return
-                if ms is not None:
-                    latency_var.set(f"{ms:.1f} ms")
-                else:
-                    latency_var.set("采集中...")
-                after_id = self._root.after(2000, _schedule)
-
-            def _on_err(err):
-                nonlocal after_id
-                if not running:
-                    return
-                latency_var.set(f"错误")
-                after_id = self._root.after(3000, _schedule)
-
-            _schedule()
-
-        def _do_stop():
-            nonlocal meter, running, after_id
-            running = False
+        def _on_win_close():
+            nonlocal after_id
             if after_id is not None:
                 self._root.after_cancel(after_id)
-                after_id = None
             if meter is not None:
                 try:
                     meter.stop()
                 except Exception:
                     pass
-                meter = None
-            start_btn.configure(text="开始延迟计算")
-            latency_var.set("-- ms")
-
-        def _toggle():
-            if running:
-                _do_stop()
-            else:
-                _do_start()
-
-        def _on_win_close():
-            _do_stop()
             win.destroy()
         win.protocol("WM_DELETE_WINDOW", _on_win_close)
 
-        start_btn = ttk.Button(ctrl, text="开始延迟计算", command=_toggle)
-        start_btn.pack(side="left", padx=(0, 12))
+        if meter is not None:
+            _schedule()
 
         ttk.Label(ctrl, text="延迟:", font=("", 10, "bold")).pack(side="left")
         ttk.Label(ctrl, textvariable=latency_var, font=("Consolas", 12),
