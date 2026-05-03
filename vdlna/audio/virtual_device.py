@@ -64,6 +64,9 @@ class VirtualAudioDevice:
         for idx, dev in enumerate(sd.query_devices()):
             if not VirtualAudioDevice._is_virtual_input(dev):
                 continue
+            # VB-CABLE WASAPI driver is buggy (-9999 WDM-KS ioctl), skip it
+            if dev["hostapi"] == wasapi_idx:
+                continue
 
             name: str = dev["name"].strip()
             name_lower = name.lower()
@@ -76,7 +79,7 @@ class VirtualAudioDevice:
                 "hostapi": dev["hostapi"],
             }
             key = f"{name_lower.split('(')[0].strip()} {dev['max_input_channels']}"
-            if key not in seen or dev["hostapi"] == wasapi_idx:
+            if key not in seen:
                 seen[key] = entry
 
         return sorted(
