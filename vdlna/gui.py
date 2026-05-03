@@ -15,6 +15,7 @@ from vdlna.dlna.discovery import scan_dlna_renderers
 from vdlna.util.config import load_config, save_config
 from vdlna.util.latency_meter import LatencyMeter
 from vdlna.util.dsp_webview import open_dsp
+from vdlna.util.media_info import get_media_info_sync
 
 try:
     from vdlna.util.windows import (
@@ -204,6 +205,10 @@ class AppGui:
                                    command=self._open_dsp_window)
         self._dsp_btn.grid(row=0, column=6, padx=(8, 0))
         self._dsp_btn.grid_remove()
+
+        self._media_info_var = tk.StringVar(value="")
+        ttk.Label(f, textvariable=self._media_info_var, foreground="#409eff").grid(
+            row=1, column=0, columnspan=7, sticky="w", pady=(4, 0))
 
     def _build_log_section(self, row: int) -> None:
         f = ttk.LabelFrame(self._root, text="日志", padding=(8, 4))
@@ -577,8 +582,15 @@ class AppGui:
                 self._stream_ready_event.set()
                 self._root.after(0, lambda: self._on_stream_started(url))
 
+                tick = 0
                 while self._streaming:
                     await asyncio.sleep(1)
+                    tick += 1
+                    if tick % 3 == 0:
+                        info = get_media_info_sync()
+                        if info:
+                            text = f"{info['artist']} - {info['title']}" if info["artist"] else info["title"]
+                            self._root.after(0, lambda t=text: self._media_info_var.set(t))
 
                 await self._app.stop_stream()
                 self._root.after(0, self._on_stream_stopped)
@@ -602,6 +614,7 @@ class AppGui:
 
     def _on_stream_stopped(self) -> None:
         self._stream_status_var.set("已停止")
+        self._media_info_var.set("")
         self._app = None
         self._log("推流已停止。")
         self._stream_done_event.set()
