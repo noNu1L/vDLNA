@@ -1,10 +1,11 @@
-"""Open unAirplay DSP panel via pywebview in a subprocess.
+"""Open unAirplay DSP panel via pywebview in a child process.
 
-pywebview requires the main thread; a subprocess provides its own.
+pywebview requires the main thread; multiprocessing provides a dedicated process.
 """
 
-import subprocess
+import multiprocessing
 import sys
+
 
 def _build_dsp_js(device_id: str | None) -> str:
     """Return JS that opens the DSP modal and hides everything else."""
@@ -72,7 +73,7 @@ def _build_dsp_js(device_id: str | None) -> str:
 
 
 def _run_webview(dsp_url: str, device_id: str | None) -> None:
-    """Entry point for the subprocess — runs webview on its main thread."""
+    """Entry point for the child process — runs webview on its main thread."""
     import webview
 
     win = webview.create_window("DSP 控制 / unAirplay", dsp_url, width=600,
@@ -85,20 +86,18 @@ def _run_webview(dsp_url: str, device_id: str | None) -> None:
     webview.start()
 
 
-_dsp_process: subprocess.Popen | None = None
+_dsp_process: multiprocessing.Process | None = None
 
 
 def open_dsp(dsp_url: str, device_id: str | None = None) -> None:
-    """Launch pywebview DSP window in a subprocess (singleton)."""
+    """Launch pywebview DSP window in a child process (singleton)."""
     global _dsp_process
-    if _dsp_process is not None and _dsp_process.poll() is None:
+    if _dsp_process is not None and _dsp_process.is_alive():
         return  # already open
-    code = (
-        f"import sys; sys.path.insert(0, {sys.path[0]!r});"
-        f"from vdlna.util.dsp_webview import _run_webview;"
-        f"_run_webview({dsp_url!r}, {device_id!r})"
+
+    _dsp_process = multiprocessing.Process(
+        target=_run_webview,
+        args=(dsp_url, device_id),
+        daemon=True,
     )
-    _dsp_process = subprocess.Popen(
-        [sys.executable, "-c", code],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    _dsp_process.start()

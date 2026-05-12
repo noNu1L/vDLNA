@@ -44,6 +44,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     _set_dpi_awareness()
     _ensure_single_instance()
     try:

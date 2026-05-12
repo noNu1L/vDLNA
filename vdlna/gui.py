@@ -19,7 +19,7 @@ from vdlna.util.dsp_webview import open_dsp
 try:
     from vdlna.util.windows import (
         has_startup_entry, add_startup_entry, remove_startup_entry,
-        get_exe_path, start_tray_icon,
+        get_exe_path, start_tray_icon, apply_window_icon,
     )
     _HAS_WINDOWS_UTILS = True
 except Exception:
@@ -94,6 +94,7 @@ class AppGui:
         self._stream_error: str | None = None
         self._log_queue = queue.Queue()
         self._dsp_device: dict | None = None
+        self._latency_win: tk.Toplevel | None = None
         self._tray_icon = None
         self._pending_auto_bind_udn: str | None = None
         self._async = AsyncLoop()
@@ -102,6 +103,7 @@ class AppGui:
         self._root = tk.Tk()
         self._root.title("vDLNA")
         self._root.resizable(False, False)
+        apply_window_icon(self._root)
 
         ww, wh = 950, 650
         sw = self._root.winfo_screenwidth()
@@ -609,6 +611,11 @@ class AppGui:
     # ── 延迟测量 ─────────────────────────────────────────────
 
     def _open_latency_window(self) -> None:
+        if self._latency_win is not None and self._latency_win.winfo_exists():
+            self._latency_win.lift()
+            self._latency_win.focus_force()
+            return
+
         win = tk.Toplevel(self._root)
         win.title("实时延迟测量")
         win.resizable(False, False)
@@ -618,6 +625,8 @@ class AppGui:
         x = self._root.winfo_x() + (self._root.winfo_width() - ww) // 2
         y = self._root.winfo_y() + (self._root.winfo_height() - wh) // 2
         win.geometry(f"{ww}x{wh}+{x}+{y}")
+
+        self._latency_win = win
 
         ttk.Label(win, text="此功能通过对比虚拟声卡输出与麦克风输入的音频信号来估算端到端延迟。",
                   wraplength=440).pack(pady=(12, 4), padx=10, anchor="w")
@@ -668,6 +677,7 @@ class AppGui:
 
         def _on_win_close():
             nonlocal after_id
+            self._latency_win = None
             if after_id is not None:
                 self._root.after_cancel(after_id)
             if meter is not None:
@@ -695,7 +705,10 @@ class AppGui:
 
         device_id = self._dsp_device.get("device_id", "")
         self._log(f"打开 DSP 控制: {dsp_url}, device={device_id}")
-        open_dsp(dsp_url, device_id)
+        try:
+            open_dsp(dsp_url, device_id)
+        except RuntimeError as e:
+            self._log(f"DSP 打开失败: {e}")
 
     # ── 日志 ─────────────────────────────────────────────────
 
