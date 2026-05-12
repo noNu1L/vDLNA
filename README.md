@@ -1,7 +1,10 @@
 # vDLNA
 
-使用虚拟声卡(VB-Audio)采集声音，推流至DLNA设备播放。
+使用虚拟声卡(VB-Audio)采集声音，推流至 DLNA 设备播放。
 
+连接 [unAirplay](https://github.com/noNu1L/unAirplay) 情况下可以联动设置 DSP。
+
+![img.png](https://github.com/noNu1L/vDLNA/blob/master/assets/ScreenShot.png?raw=true)
 ---
 
 ## 环境要求
